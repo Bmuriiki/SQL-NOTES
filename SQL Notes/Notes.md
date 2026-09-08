@@ -3091,6 +3091,419 @@ Example:
 - Window frames are essential for advanced analytical SQL and time-series analysis.
 
 
+# PostgreSQL Idempotency Practice
+
+## 📌 Overview
+
+This project demonstrates **idempotency in PostgreSQL** using `INSERT`, `ON CONFLICT`, `DO NOTHING`, and `DO UPDATE`.
+
+Idempotency is an important concept in **Data Engineering and ETL/ELT pipelines** because it allows a database operation to be safely executed multiple times without creating unwanted duplicate records.
+
+---
+
+## 🎯 Objectives
+
+The purpose of this exercise is to understand how to:
+
+* Create a PostgreSQL table
+* Define a `PRIMARY KEY`
+* Insert records into a table
+* Handle duplicate records
+* Use `ON CONFLICT`
+* Use `DO NOTHING`
+* Perform an UPSERT using `DO UPDATE`
+* Use `EXCLUDED` to reference incoming values
+* Build database operations that can safely be re-run
+
+---
+
+## 🗄️ Table Structure
+
+The project creates the following table:
+
+```sql
+CREATE TABLE crypto.orders_practice (
+    order_id INT PRIMARY KEY,
+    customer_name VARCHAR(100),
+    amount NUMERIC(10,2)
+);
+```
+
+### Columns
+
+| Column          | Data Type       | Description                    |
+| --------------- | --------------- | ------------------------------ |
+| `order_id`      | `INT`           | Unique identifier for an order |
+| `customer_name` | `VARCHAR(100)`  | Name of the customer           |
+| `amount`        | `NUMERIC(10,2)` | Order amount                   |
+
+The `order_id` column is defined as the **PRIMARY KEY**, ensuring that each order has a unique identifier.
+
+---
+
+# 🔄 What is Idempotency?
+
+**Idempotency** means that running the same operation multiple times produces the same final result as running it once.
+
+For example, if we insert:
+
+```text
+1001 | Brian | 5000
+```
+
+and the same operation is executed again, an idempotent process should not create another `1001` record.
+
+This is particularly useful in ETL pipelines where jobs may be:
+
+* Retried after failure
+* Re-run manually
+* Triggered more than once
+* Processing duplicate data
+
+---
+
+# 1️⃣ Basic INSERT
+
+The first operation inserts an order:
+
+```sql
+INSERT INTO crypto.orders_practice (
+    order_id,
+    customer_name,
+    amount
+)
+VALUES (
+    1001,
+    'Brian',
+    5000
+);
+```
+
+The resulting record is:
+
+```text
+1001 | Brian | 5000
+```
+
+Because `order_id` is a primary key, another record with `order_id = 1001` cannot be inserted normally.
+
+---
+
+# 2️⃣ Handling Conflicts with `DO NOTHING`
+
+PostgreSQL provides `ON CONFLICT` to handle duplicate records.
+
+```sql
+INSERT INTO crypto.orders_practice (
+    order_id,
+    customer_name,
+    amount
+)
+VALUES (
+    1001,
+    'Brian',
+    5000
+)
+ON CONFLICT(order_id)
+DO NOTHING;
+```
+
+### What happens?
+
+If `order_id = 1001` already exists, PostgreSQL detects the conflict and does nothing.
+
+The existing record remains unchanged:
+
+```text
+1001 | Brian | 5000
+```
+
+### When to use `DO NOTHING`
+
+Use this approach when duplicate records should simply be ignored.
+
+---
+
+# 3️⃣ UPSERT with `DO UPDATE`
+
+The project also demonstrates an **UPSERT**.
+
+UPSERT means:
+
+> Insert the record if it doesn't exist; otherwise, update the existing record.
+
+```sql
+INSERT INTO crypto.orders_practice (
+    order_id,
+    customer_name,
+    amount
+)
+VALUES (
+    1001,
+    'Brian',
+    5500
+)
+ON CONFLICT (order_id)
+DO UPDATE SET
+    customer_name = EXCLUDED.customer_name,
+    amount = EXCLUDED.amount;
+```
+
+The existing record:
+
+```text
+1001 | Brian | 5000
+```
+
+is updated to:
+
+```text
+1001 | Brian | 5500
+```
+
+---
+
+# 🔑 Understanding `EXCLUDED`
+
+`EXCLUDED` represents the values from the new row that PostgreSQL attempted to insert.
+
+For example:
+
+```sql
+VALUES (
+    1001,
+    'Brian',
+    5500
+)
+```
+
+The value:
+
+```sql
+EXCLUDED.amount
+```
+
+refers to:
+
+```text
+5500
+```
+
+Therefore:
+
+```sql
+amount = EXCLUDED.amount
+```
+
+means:
+
+> Update the existing amount with the incoming amount.
+
+---
+
+# 4️⃣ Inserting a New Record with UPSERT
+
+The project also inserts a second order:
+
+```sql
+INSERT INTO crypto.orders_practice (
+    order_id,
+    customer_name,
+    amount
+)
+VALUES (
+    1002,
+    'Alice',
+    3200
+)
+ON CONFLICT (order_id)
+DO UPDATE SET
+    customer_name = EXCLUDED.customer_name,
+    amount = EXCLUDED.amount;
+```
+
+Since `order_id = 1002` does not already exist, PostgreSQL inserts the record.
+
+The table now contains:
+
+```text
+1001 | Brian | 5500
+1002 | Alice | 3200
+```
+
+---
+
+# 📊 Final Table
+
+The contents of the table can be viewed using:
+
+```sql
+SELECT *
+FROM crypto.orders_practice;
+```
+
+Expected result:
+
+| order_id | customer_name | amount |
+| -------: | ------------- | -----: |
+|     1001 | Brian         |   5500 |
+|     1002 | Alice         |   3200 |
+
+---
+
+# ⚙️ Idempotency in ETL Pipelines
+
+Idempotency is especially important in Data Engineering.
+
+A typical ETL pipeline might look like:
+
+```text
+API
+ ↓
+Extract
+ ↓
+Transform
+ ↓
+Load
+ ↓
+PostgreSQL
+```
+
+Suppose an ETL job loads:
+
+```text
+1001 | Brian | 5500
+1002 | Alice | 3200
+```
+
+If the job fails and is restarted, the same records may be processed again.
+
+Without idempotency, this could result in duplicate records.
+
+Using:
+
+```sql
+ON CONFLICT (order_id)
+DO UPDATE
+```
+
+allows the pipeline to safely process the same order again without creating another row with the same `order_id`.
+
+---
+
+# 🆚 `DO NOTHING` vs `DO UPDATE`
+
+| Feature                | `DO NOTHING` | `DO UPDATE` |
+| ---------------------- | ------------ | ----------- |
+| Insert new record      | ✅            | ✅           |
+| Handle duplicate       | Ignore       | Update      |
+| Modify existing data   | ❌            | ✅           |
+| Prevent duplicate rows | ✅            | ✅           |
+| Useful for ETL         | ✅            | ✅           |
+
+### `DO NOTHING`
+
+```sql
+ON CONFLICT(order_id)
+DO NOTHING;
+```
+
+Use when you want to **ignore duplicate records**.
+
+### `DO UPDATE`
+
+```sql
+ON CONFLICT(order_id)
+DO UPDATE SET
+    customer_name = EXCLUDED.customer_name,
+    amount = EXCLUDED.amount;
+```
+
+Use when you want to **update an existing record with incoming data**.
+
+---
+
+# 🧠 Key Concepts Learned
+
+This exercise demonstrates the following PostgreSQL and Data Engineering concepts:
+
+* **Primary Keys**
+* **Unique records**
+* **Conflict detection**
+* **`ON CONFLICT`**
+* **`DO NOTHING`**
+* **UPSERT**
+* **`DO UPDATE`**
+* **`EXCLUDED`**
+* **Idempotent database operations**
+* **Safe ETL/ELT retries**
+
+---
+
+# 🚀 Why Idempotency Matters
+
+In production Data Engineering systems, pipelines don't always run only once.
+
+A pipeline might be executed again because of:
+
+```text
+Job failure
+     ↓
+Retry
+     ↓
+Same data processed again
+```
+
+An idempotent process ensures that reprocessing the same data does not unnecessarily create duplicate records or produce an incorrect final state.
+
+This makes data pipelines:
+
+* More reliable
+* Easier to retry
+* Safer to operate
+* More predictable
+* Easier to maintain
+
+---
+
+## 📁 Project Structure
+
+```text
+.
+├── Idempotency.sql
+└── README.md
+```
+
+---
+
+## 🛠️ Technologies Used
+
+* PostgreSQL
+* SQL
+* Data Engineering / ETL concepts
+
+---
+
+## 📚 Summary
+
+This project demonstrates how PostgreSQL can be used to implement idempotent database operations.
+
+The key pattern is:
+
+```sql
+INSERT INTO table (...)
+VALUES (...)
+ON CONFLICT (primary_key)
+DO UPDATE SET
+    column1 = EXCLUDED.column1,
+    column2 = EXCLUDED.column2;
+```
+
+By using a unique key together with `ON CONFLICT`, database operations can be safely re-run without creating duplicate records.
+
+**Idempotency is an essential concept for building reliable and fault-tolerant ETL/ELT data pipelines.**
+
+
 
 
 
